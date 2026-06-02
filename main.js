@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const THEME_STORAGE_KEY = 'appTheme';
     const BUTTON_PALETTE_STORAGE_KEY = 'appButtonPalette';
     const CUSTOM_THEME_STORAGE_KEY = 'appCustomTheme';
-    const APP_VERSION = 'v1.9.8 beta';
+    const APP_VERSION = 'v1.9.8.1 beta';
     const ADMIN_PANEL_PASSWORD_HASH =
         '35a092cbedd97769bf58b31dcb81324bceba0a55e0c7a61a6db37f8ec24e6784';
     const THEMES = ['light', 'blue', 'dark', 'custom'];
