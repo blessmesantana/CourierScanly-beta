@@ -15,13 +15,12 @@
     <script>
         (() => {
             try {
-                const theme = localStorage.getItem('appTheme');
+                const theme = localStorage.getItem('appTheme') || 'blue'; // ← FALLBACK на 'blue'
                 const buttonPalette = localStorage.getItem('appButtonPalette');
                 const themeColorMeta = document.querySelector('meta[name="theme-color"]');
                 const rootStyle = document.documentElement.style;
 
-                console.log('[HEAD SCRIPT] Loaded theme from localStorage:', theme);
-                console.log('[HEAD SCRIPT] Button palette:', buttonPalette);
+                console.log('[HEAD SCRIPT] Loaded theme from localStorage:', theme, 'palette:', buttonPalette);
 
                 const normalizeHex = (value, fallback) => (
                     /^#[0-9a-f]{6}$/i.test(value || '')
@@ -78,28 +77,129 @@
                     theme === 'blue' ||
                     theme === 'custom'
                 ) {
+                    // ← Это условие теперь ВСЕГДА true потому что есть fallback на 'blue'
                     document.documentElement.dataset.theme = theme;
+                    const buttonPaletteValue = buttonPalette || 'default';
+                    if (buttonPaletteValue !== 'default') {
+                        document.documentElement.dataset.buttonPalette = buttonPaletteValue;
+                    }
                     
-                    // ⭐ Установляем фон ДО загрузки CSS чтобы избежать flash of wrong color
-                    let bgColor = '#3949AB'; // default blue
-                    if (theme === 'dark') {
-                        bgColor = '#000000';
+                    // ⭐ Установляем ВСЕ критические CSS переменные ДО показа контента
+                    // чтобы избежать flash of unstyled content на кнопках
+                    const setCSSVars = (vars) => {
+                        Object.entries(vars).forEach(([name, value]) => {
+                            // !important гарантирует что inline стили имеют приоритет над CSS файлом
+                            document.documentElement.style.setProperty(name, value, 'important');
+                            document.body.style.setProperty(name, value, 'important');
+                        });
+                    };
+
+                    // Определяем переменные по теме
+                    let themeVars = {};
+                    
+                    if (theme === 'blue') {
+                        themeVars = {
+                            '--color-app-bg': '#3949AB',
+                            '--color-screen-bg': '#3949AB',
+                            '--color-primary': '#ea1e63',
+                            '--color-primary-hover': '#c2185b',
+                            '--color-primary-text': '#ffffff',
+                            '--color-scan-button-bg': '#ea1e63',
+                            '--color-scan-button-hover-bg': '#c2185b',
+                            '--color-scan-button-text': '#ffffff',
+                            '--color-frame': '#ea1e63',
+                        };
+                    } else if (theme === 'dark') {
+                        themeVars = {
+                            '--color-app-bg': '#141414',
+                            '--color-screen-bg': '#141414',
+                            '--color-primary': 'linear-gradient(135deg, #d0e7ff55, #a0d8ff)',
+                            '--color-primary-hover': 'linear-gradient(135deg, #d0e7ff75, #b6e4ff)',
+                            '--color-primary-text': '#ffffff',
+                            '--color-scan-button-bg': 'linear-gradient(135deg, rgba(255, 215, 0, 0.55), #ffcc00)',
+                            '--color-scan-button-hover-bg': 'linear-gradient(135deg, rgba(255, 215, 0, 0.7), #e0b300)',
+                            '--color-scan-button-text': '#2f2400',
+                            '--color-frame': '#ffcc00',
+                        };
                     } else if (theme === 'light') {
-                        bgColor = '#e8e8e8';
+                        themeVars = {
+                            '--color-app-bg': '#e8e8e8',
+                            '--color-screen-bg': '#e8e8e8',
+                            '--color-primary': 'linear-gradient(135deg, #fafbfc, #d6dde6)',
+                            '--color-primary-hover': 'linear-gradient(135deg, #ffffff, #e1e7ef)',
+                            '--color-primary-text': '#1b2128',
+                            '--color-scan-button-bg': 'linear-gradient(135deg, #ffffff, #d9e1eb)',
+                            '--color-scan-button-hover-bg': 'linear-gradient(135deg, #ffffff, #cfd8e3)',
+                            '--color-scan-button-text': '#222831',
+                            '--color-frame': '#7eaed4',
+                        };
                     } else if (theme === 'custom') {
                         const customThemeRaw = localStorage.getItem('appCustomTheme');
                         if (customThemeRaw) {
                             try {
                                 const customTheme = JSON.parse(customThemeRaw);
-                                if (customTheme?.background?.hex && /^#[0-9a-f]{6}$/i.test(customTheme.background.hex)) {
-                                    bgColor = customTheme.background.hex;
-                                }
-                            } catch (e) {}
+                                const bgHex = normalizeHex(customTheme?.background?.hex, '#3949AB');
+                                const btnHex = normalizeHex(customTheme?.buttons?.hex, '#EA1E63');
+                                const btnHoverHex = mixHexColors(btnHex, '#000000', 0.16);
+                                const btnText = getRelativeLuminance(btnHex) > 0.58 ? '#1F242B' : '#FFFFFF';
+                                
+                                themeVars = {
+                                    '--color-app-bg': bgHex,
+                                    '--color-screen-bg': bgHex,
+                                    '--color-primary': btnHex,
+                                    '--color-primary-hover': btnHoverHex,
+                                    '--color-primary-text': btnText,
+                                    '--color-scan-button-bg': btnHex,
+                                    '--color-scan-button-hover-bg': btnHoverHex,
+                                    '--color-scan-button-text': btnText,
+                                    '--color-frame': btnHex,
+                                };
+                            } catch (e) {
+                                themeVars = {
+                                    '--color-app-bg': '#3949AB',
+                                    '--color-screen-bg': '#3949AB',
+                                    '--color-primary': '#ea1e63',
+                                    '--color-primary-hover': '#c2185b',
+                                    '--color-primary-text': '#ffffff',
+                                    '--color-scan-button-bg': '#ea1e63',
+                                    '--color-scan-button-hover-bg': '#c2185b',
+                                    '--color-scan-button-text': '#ffffff',
+                                    '--color-frame': '#ea1e63',
+                                };
+                            }
                         }
                     }
-                    document.documentElement.style.backgroundColor = bgColor;
-                    document.body.style.backgroundColor = bgColor;
-                    console.log('[HEAD SCRIPT] Applied background color:', bgColor);
+                    
+                    setCSSVars(themeVars);
+                    
+                    // ⭐ Применяем palette override если выбран
+                    if (buttonPalette && buttonPalette !== 'default') {
+                        let paletteVars = {};
+                        if (buttonPalette === 'pink') {
+                            paletteVars = {
+                                '--color-primary': '#ea1e63',
+                                '--color-primary-hover': '#c2185b',
+                                '--color-primary-text': '#ffffff',
+                                '--color-scan-button-bg': '#ea1e63',
+                                '--color-scan-button-hover-bg': '#c2185b',
+                                '--color-scan-button-text': '#ffffff',
+                                '--color-frame': '#ea1e63',
+                            };
+                        } else if (buttonPalette === 'platinum') {
+                            paletteVars = {
+                                '--color-primary': 'linear-gradient(135deg, #eef2f6, #bfc7d2)',
+                                '--color-primary-hover': 'linear-gradient(135deg, #f7f9fb, #cfd6df)',
+                                '--color-primary-text': '#16181c',
+                                '--color-scan-button-bg': 'linear-gradient(135deg, #eef2f6, #bfc7d2)',
+                                '--color-scan-button-hover-bg': 'linear-gradient(135deg, #f7f9fb, #cfd6df)',
+                                '--color-scan-button-text': '#16181c',
+                                '--color-frame': '#bfc7d2',
+                            };
+                        }
+                        setCSSVars(paletteVars);
+                    }
+                    
+                    console.log('[HEAD SCRIPT] Applied theme variables for theme:', theme, 'palette:', buttonPalette);
                 }
 
                 if (theme === 'custom') {
@@ -301,6 +401,101 @@
         })();
     </script>
     <link rel="stylesheet" href="styles.css">
+    <script>
+        // ⭐ КРИТИЧНЫЙ: Переустанавливаем CSS переменные ПОСЛЕ загрузки CSS
+        // чтобы избежать flash of color при перезагрузке
+        // Это решает проблему когда CSS селекторы [data-theme] переопределяют inline стили
+        (() => {
+            try {
+                const theme = localStorage.getItem('appTheme') || 'blue'; // ← FALLBACK на дефолт
+                const buttonPalette = localStorage.getItem('appButtonPalette');
+                const doc = document.documentElement;
+                const bod = document.body;
+                
+                // Устанавливаем переменные с !important чтобы переопределить CSS
+                const applyVars = (vars) => {
+                    Object.entries(vars).forEach(([k, v]) => {
+                        doc.style.setProperty(k, v, 'important');
+                        bod.style.setProperty(k, v, 'important');
+                    });
+                };
+                
+                let vars = {};
+                
+                // Определяем цвета в зависимости от темы
+                if (theme === 'blue') {
+                    vars = {
+                        '--color-primary': '#ea1e63',
+                        '--color-primary-hover': '#c2185b',
+                        '--color-scan-button-bg': '#ea1e63',
+                        '--color-scan-button-hover-bg': '#c2185b',
+                    };
+                } else if (theme === 'dark') {
+                    vars = {
+                        '--color-primary': 'linear-gradient(135deg, #d0e7ff55, #a0d8ff)',
+                        '--color-primary-hover': 'linear-gradient(135deg, #d0e7ff75, #b6e4ff)',
+                        '--color-scan-button-bg': 'linear-gradient(135deg, rgba(255, 215, 0, 0.55), #ffcc00)',
+                        '--color-scan-button-hover-bg': 'linear-gradient(135deg, rgba(255, 215, 0, 0.7), #e0b300)',
+                    };
+                } else if (theme === 'light') {
+                    vars = {
+                        '--color-primary': 'linear-gradient(135deg, #fafbfc, #d6dde6)',
+                        '--color-primary-hover': 'linear-gradient(135deg, #ffffff, #e1e7ef)',
+                        '--color-scan-button-bg': 'linear-gradient(135deg, #ffffff, #d9e1eb)',
+                        '--color-scan-button-hover-bg': 'linear-gradient(135deg, #ffffff, #cfd8e3)',
+                    };
+                } else if (theme === 'custom') {
+                    // Загружаем кастомную тему из localStorage
+                    try {
+                        const customThemeRaw = localStorage.getItem('appCustomTheme');
+                        if (customThemeRaw) {
+                            const customTheme = JSON.parse(customThemeRaw);
+                            const btnHex = customTheme?.buttons?.hex || '#EA1E63';
+                            // Предполагаем что hover это -16% затемнение (как в codem.js)
+                            // Но если есть, используем сохраненное значение
+                            vars = {
+                                '--color-primary': btnHex,
+                                '--color-primary-hover': btnHex,
+                                '--color-scan-button-bg': btnHex,
+                                '--color-scan-button-hover-bg': btnHex,
+                            };
+                            console.log('[POST-CSS] Loaded custom theme buttons:', btnHex);
+                        } else {
+                            throw new Error('No custom theme data');
+                        }
+                    } catch (e) {
+                        // Fallback на дефолт если не удалось загрузить custom
+                        vars = {
+                            '--color-primary': '#ea1e63',
+                            '--color-primary-hover': '#c2185b',
+                            '--color-scan-button-bg': '#ea1e63',
+                            '--color-scan-button-hover-bg': '#c2185b',
+                        };
+                        console.warn('[POST-CSS] Failed to load custom theme, using fallback:', e.message);
+                    }
+                }
+                
+                // Переопределяем кнопки если выбран palette
+                if (buttonPalette === 'pink') {
+                    vars['--color-primary'] = '#ea1e63';
+                    vars['--color-primary-hover'] = '#c2185b';
+                    vars['--color-scan-button-bg'] = '#ea1e63';
+                    vars['--color-scan-button-hover-bg'] = '#c2185b';
+                } else if (buttonPalette === 'platinum') {
+                    vars['--color-primary'] = 'linear-gradient(135deg, #eef2f6, #bfc7d2)';
+                    vars['--color-primary-hover'] = 'linear-gradient(135deg, #f7f9fb, #cfd6df)';
+                    vars['--color-scan-button-bg'] = 'linear-gradient(135deg, #eef2f6, #bfc7d2)';
+                    vars['--color-scan-button-hover-bg'] = 'linear-gradient(135deg, #f7f9fb, #cfd6df)';
+                }
+                
+                // ВСЕГДА применяем переменные (тема может быть null → fallback на 'blue')
+                applyVars(vars);
+                console.log('[POST-CSS] Applied button colors:', {theme, buttonPalette, vars});
+            } catch (e) {
+                console.error('[POST-CSS SCRIPT] Error:', e);
+            }
+        })();
+    </script>
     <script type="module" src="main.js"></script>
     <script type="module" src="firebase.js"></script>
     <style>

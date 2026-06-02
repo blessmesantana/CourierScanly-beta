@@ -3552,49 +3552,114 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function syncPendingOfflineScans(reason = 'online') {
+    let pendingOfflineSyncPromise = null;
+    let lastConnectivityToastKey = '';
+    let lastConnectivityToastAt = 0;
+    let lastConnectivityState = navigator.onLine ? 'online' : 'offline';
+
+    function showConnectivityToast(key, text, options = {}) {
+        const now = Date.now();
+        if (
+            key === lastConnectivityToastKey
+            && (now - lastConnectivityToastAt) < (options.dedupeMs || 1800)
+        ) {
+            return;
+        }
+
+        lastConnectivityToastKey = key;
+        lastConnectivityToastAt = now;
+        ui.showToast(text, options);
+    }
+
+    async function getPendingOfflineScanCount() {
         try {
-            const result = await service.flushPendingScans?.();
-
-            if (!result || result.flushedCount <= 0) {
-                return result;
-            }
-
-            ui.showToast(
-                result.flushedCount === 1
-                    ? 'Оффлайн-скан синхронизирован'
-                    : `Оффлайн-сканы синхронизированы: ${result.flushedCount}`,
-                {
-                    duration: 2200,
-                },
-            );
-            trackEvent('offline_scans_synced', {
-                flushedCount: result.flushedCount,
-                pendingCount: result.pendingCount,
-                reason,
-            });
-            return result;
+            return await service.getPendingOfflineScanCount?.();
         } catch (error) {
-            captureException(error, {
-                operation: 'flush_pending_offline_scans',
-                reason,
-                tags: {
-                    scope: 'offline_mode',
-                },
-            });
-            return null;
+            return 0;
         }
     }
 
+    async function syncPendingOfflineScans(reason = 'online', options = {}) {
+        if (pendingOfflineSyncPromise) {
+            return pendingOfflineSyncPromise;
+        }
+
+        pendingOfflineSyncPromise = (async () => {
+            try {
+                const pendingBeforeSync = Number.isFinite(options.pendingCount)
+                    ? options.pendingCount
+                    : await getPendingOfflineScanCount();
+
+                if (pendingBeforeSync <= 0) {
+                    return {
+                        flushedCount: 0,
+                        pendingCount: 0,
+                    };
+                }
+
+                const result = await service.flushPendingScans?.();
+                if (!result) {
+                    return result;
+                }
+
+                if (result.flushedCount > 0) {
+                    showConnectivityToast(
+                        `offline_scans_synced_${result.flushedCount}_${result.pendingCount}`,
+                        result.flushedCount === 1
+                            ? 'Оффлайн-скан отправлен'
+                            : `Оффлайн-сканы отправлены: ${result.flushedCount}`,
+                        {
+                            duration: 2200,
+                        },
+                    );
+                    trackEvent('offline_scans_synced', {
+                        flushedCount: result.flushedCount,
+                        pendingCount: result.pendingCount,
+                        reason,
+                    });
+                } else if (
+                    (reason === 'browser_online' || reason === 'app_start')
+                    && result.pendingCount > 0
+                ) {
+                    showConnectivityToast(
+                        `offline_scans_pending_${result.pendingCount}`,
+                        `Интернет появился, но ${result.pendingCount} скан(ов) пока ждут отправки`,
+                        {
+                            duration: 2400,
+                            type: 'error',
+                            dedupeMs: 2500,
+                        },
+                    );
+                }
+
+                return result;
+            } catch (error) {
+                captureException(error, {
+                    operation: 'flush_pending_offline_scans',
+                    reason,
+                    tags: {
+                        scope: 'offline_mode',
+                    },
+                });
+                return null;
+            } finally {
+                pendingOfflineSyncPromise = null;
+            }
+        })();
+
+        return pendingOfflineSyncPromise;
+    }
+
     async function showOfflineModeNotice() {
-        const pendingCount = await service.getPendingOfflineScanCount?.().catch(() => 0);
+        const pendingCount = await getPendingOfflineScanCount();
         const text = pendingCount > 0
             ? `Оффлайн-режим: ${pendingCount} скан(ов) ждут отправки`
-            : 'Оффлайн-режим: доступны последние сохранённые данные';
+            : 'Оффлайн-режим: доступны сохранённые данные';
 
-        ui.showToast(text, {
+        showConnectivityToast(`offline_mode_${pendingCount}`, text, {
             duration: 2400,
             type: 'error',
+            dedupeMs: 2500,
         });
     }
 
@@ -3613,18 +3678,44 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         window.addEventListener('offline', () => {
+            if (lastConnectivityState === 'offline') {
+                return;
+            }
+
+            lastConnectivityState = 'offline';
             void showOfflineModeNotice();
         });
 
-        window.addEventListener('online', () => {
-            ui.showToast('Интернет появился, синхронизируем оффлайн-сканы', {
-                duration: 2200,
-            });
-            void syncPendingOfflineScans('browser_online');
+        window.addEventListener('online', async () => {
+            if (lastConnectivityState === 'online') {
+                return;
+            }
+
+            lastConnectivityState = 'online';
+
+            const pendingCount = await getPendingOfflineScanCount();
+            if (pendingCount > 0) {
+                showConnectivityToast(
+                    `online_sync_start_${pendingCount}`,
+                    `Интернет появился, отправляем оффлайн-сканы: ${pendingCount}`,
+                    {
+                        duration: 2200,
+                    },
+                );
+            } else {
+                showConnectivityToast('online_restored', 'Интернет появился', {
+                    duration: 1800,
+                });
+            }
+
+            void syncPendingOfflineScans('browser_online', { pendingCount });
         });
 
         if (navigator.onLine) {
-            void syncPendingOfflineScans('app_start');
+            const pendingCount = await getPendingOfflineScanCount();
+            if (pendingCount > 0) {
+                void syncPendingOfflineScans('app_start', { pendingCount });
+            }
         } else {
             void showOfflineModeNotice();
         }
@@ -3655,10 +3746,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 ui.cleanupUiState();
             }
             
-            // Sync any pending offline scans before leaving
-            if (typeof syncPendingOfflineScans === 'function') {
-                void syncPendingOfflineScans('page_unload');
-            }
         } catch (error) {
             // Silently ignore cleanup errors to not interfere with page unload
             console.warn('[beforeunload] Cleanup error:', error);

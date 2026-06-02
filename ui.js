@@ -356,17 +356,16 @@ export function createUiController({ dom }) {
     }
 
     function showToast(text, options = {}) {
+        const normalizedText = String(text || '').trim();
+        if (!normalizedText) {
+            return;
+        }
+
         const type = options.type === 'error' ? 'error' : 'success';
         const duration = options.duration || 1600;
 
-        // Update UI state based on message type
-        if (type === 'error') {
-            setUiState(UI_STATES.ERROR);
-        } else {
-            setUiState(UI_STATES.SUCCESS);
-        }
-
-        createFloatingMessage(text, type, duration);
+        // Toast is informational and must not interfere with scanner/loading state.
+        createFloatingMessage(normalizedText, type, duration);
     }
 
     function showCameraNotice(kind, text, options = {}) {

@@ -4,8 +4,8 @@ import {
 } from './logger.js';
 import {
     createCallGuard,
+    categorizeError,
     getUriUserFriendlyMessage,
-    ERROR_CATEGORY,
 } from './error-handler.js';
 
 export function createScannerController({
@@ -17,12 +17,10 @@ export function createScannerController({
     const SCAN_VIBRATION_MS = 100;
     const SCAN_VIBRATION_THROTTLE_MS = 1500;
 
-    // КРИТИЧНО: Guard для предотвращения concurrent обработки скана
-    // Гарантирует что обработка одного кода завершится перед началом следующей
+    // Prevent concurrent scan processing.
     const processGuard = createCallGuard();
 
-    // КРИТИЧНО: Guard для ручной отправки формы
-    // Предотвращает duplicate submit если пользователь несколько раз нажимает кнопку
+    // Prevent duplicate manual submits.
     const submitGuard = createCallGuard();
 
     function triggerScanFeedback(status) {
@@ -73,103 +71,115 @@ export function createScannerController({
         };
     }
 
-    async function processTransferId(transferId, options = {}) {
-        // КРИТИЧНО: Используем guard для предотвращения concurrent обработки
-        // Возвращаем null если уже обрабатываем перевод - предотвращаем дублирование
-        return processGuard.execute(
-            async () => {
-                ui.setLoading(true);
+    async function processTransferIdInternal(transferId, options = {}) {
+        state.isProcessing = true;
+        ui.setLoading(true);
 
-                try {
-                    const matchedResult = await service.findMatchingDeliveriesByTransferId(
-                        transferId,
-                    );
+        try {
+            const matchedResult = await service.findMatchingDeliveriesByTransferId(
+                transferId,
+            );
 
-                    if (!matchedResult.cleanedId) {
-                        ui.showScanResult('error', 'Неверный формат QR', '', '', '');
-                        trackEvent(
-                            'manual_submit_invalid',
-                            {
-                                inputLength: String(transferId || '').length,
-                                source: options.resumeAfterSelection ? 'scan' : 'manual',
-                            },
-                            'warning',
-                        );
-                        return {
-                            status: 'invalid',
-                        };
-                    }
-
-                    if (matchedResult.matches.length === 0) {
-                        ui.showScanResult('not_found', matchedResult.cleanedId);
-                        trackEvent('delivery_not_found', {
-                            source: options.resumeAfterSelection ? 'scan' : 'manual',
-                            transferId: matchedResult.cleanedId,
-                        });
-                        return {
-                            status: 'not_found',
-                            cleanedId: matchedResult.cleanedId,
-                        };
-                    }
-
-                    if (matchedResult.matches.length === 1) {
-                        return processDeliveryScan(matchedResult.matches[0]);
-                    }
-
-                    ui.showTransferSelectModal(
-                        matchedResult.matches,
-                        async (selected) => {
-                            try {
-                                await processDeliveryScan(selected);
-                            } finally {
-                                camera.resumeAfterSelection?.({
-                                    cancelled: false,
-                                    source: 'selection_resolved',
-                                });
-                            }
-                        },
-                        () => {
-                            camera.resumeAfterSelection?.({
-                                cancelled: true,
-                                source: 'selection_closed',
-                            });
-                        },
-                    );
-
-                    return {
-                        status: 'selection_required',
-                        cleanedId: matchedResult.cleanedId,
-                    };
-                } catch (error) {
-                    console.error('Ошибка при поиске передачи:', error);
-                    captureException(error, {
-                        operation: 'process_transfer_id',
+            if (!matchedResult.cleanedId) {
+                ui.showScanResult('error', 'Неверный формат QR', '', '', '');
+                trackEvent(
+                    'manual_submit_invalid',
+                    {
+                        inputLength: String(transferId || '').length,
                         source: options.resumeAfterSelection ? 'scan' : 'manual',
-                        transferId: transferId || '',
-                        tags: {
-                            scope: 'scanner',
-                        },
+                    },
+                    'warning',
+                );
+                return {
+                    status: 'invalid',
+                };
+            }
+
+            if (matchedResult.matches.length === 0) {
+                ui.showScanResult('not_found', matchedResult.cleanedId);
+                trackEvent('delivery_not_found', {
+                    source: options.resumeAfterSelection ? 'scan' : 'manual',
+                    transferId: matchedResult.cleanedId,
+                });
+                return {
+                    status: 'not_found',
+                    cleanedId: matchedResult.cleanedId,
+                };
+            }
+
+            if (matchedResult.matches.length === 1) {
+                return processDeliveryScan(matchedResult.matches[0]);
+            }
+
+            ui.showTransferSelectModal(
+                matchedResult.matches,
+                async (selected) => {
+                    try {
+                        await processDeliveryScan(selected);
+                    } finally {
+                        camera.resumeAfterSelection?.({
+                            cancelled: false,
+                            source: 'selection_resolved',
+                        });
+                    }
+                },
+                () => {
+                    camera.resumeAfterSelection?.({
+                        cancelled: true,
+                        source: 'selection_closed',
                     });
+                },
+            );
 
-                    // user-friendly сообщение об ошибке
-                    const errorMessage = error?.message?.includes('network')
-                        ? 'Ошибка сети. Проверьте подключение.'
-                        : 'Ошибка при поиске передачи.';
+            return {
+                status: 'selection_required',
+                cleanedId: matchedResult.cleanedId,
+            };
+        } catch (error) {
+            console.error('Ошибка при поиске передачи:', error);
+            captureException(error, {
+                operation: 'process_transfer_id',
+                source: options.resumeAfterSelection ? 'scan' : 'manual',
+                transferId: transferId || '',
+                tags: {
+                    scope: 'scanner',
+                },
+            });
 
-                    ui.showScanResult('error', errorMessage, '', '', '');
+            const errorCategory = categorizeError(error);
+            const errorMessage = errorCategory === 'unknown_error'
+                ? 'Ошибка при поиске передачи.'
+                : getUriUserFriendlyMessage(errorCategory);
 
-                    return {
-                        status: 'error',
-                        error,
-                    };
-                } finally {
-                    ui.setLoading(false);
-                }
-            },
+            ui.showScanResult('error', errorMessage, '', '', '');
+
+            return {
+                status: 'error',
+                error,
+            };
+        } finally {
+            state.isProcessing = false;
+            ui.setLoading(false);
+        }
+    }
+
+    async function processTransferId(transferId, options = {}) {
+        return processGuard.execute(
+            () => processTransferIdInternal(transferId, options),
             {
                 operation: 'process_transfer_id',
                 source: options.resumeAfterSelection ? 'scan' : 'manual',
-            }
+            },
+        );
+    }
+
+    async function submitTransferId(transferId, options = {}) {
+        return submitGuard.execute(
+            () => processTransferId(transferId, options),
+            {
+                operation: 'submit_transfer_id',
+                source: options.resumeAfterSelection ? 'scan' : 'manual',
+            },
         );
     }
 
@@ -185,6 +195,6 @@ export function createScannerController({
     return {
         handleScanSuccess,
         processDeliveryScan,
-        processTransferId,
+        processTransferId: submitTransferId,
     };
 }
