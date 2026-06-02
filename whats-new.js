@@ -1,7 +1,7 @@
 import { markNewBadgeSeen, shouldShowNewBadge } from './new-badges.js';
 
 const NEW_BADGE_VERSIONS = new Map([
-    ['v1.9.8 beta', 'whats_new_v1.9.8 beta'],
+    ['v1.9.8.1 beta', 'whats_new_v1.9.8.1 beta'],
     ['v1.9.7', 'whats_new_v1.9.7'],
 ]);
 
